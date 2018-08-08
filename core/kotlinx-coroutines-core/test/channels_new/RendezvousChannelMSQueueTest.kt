@@ -1,4 +1,4 @@
-package channels_new
+package kotlinx.coroutines.experimental.channels_new
 
 import kotlinx.coroutines.experimental.TestBase
 import kotlinx.coroutines.experimental.launch
@@ -6,10 +6,10 @@ import kotlinx.coroutines.experimental.yield
 import kotlin.coroutines.experimental.coroutineContext
 import kotlin.test.*
 
-class RendezvousChannelStackTest  : TestBase() {
+class RendezvousChannelMSQueueTest  : TestBase() {
     @Test
     fun testSimple() = runTest {
-        val q = RendezvousChannelStack<Int>()
+        val q = RendezvousChannelMSQueue<Int>()
         expect(1)
         val sender = launch(coroutineContext) {
             expect(4)
@@ -34,7 +34,7 @@ class RendezvousChannelStackTest  : TestBase() {
 
     @Test
     fun testOfferAndPool() = runTest {
-        val q = RendezvousChannelStack<Int>()
+        val q = RendezvousChannelMSQueue<Int>()
         assertFalse(q.offer(1))
         expect(1)
         launch(coroutineContext) {
@@ -63,7 +63,7 @@ class RendezvousChannelStackTest  : TestBase() {
     @Test
     fun testStress() = runTest {
         val n = 100_000
-        val q = RendezvousChannelStack<Int>()
+        val q = RendezvousChannelMSQueue<Int>()
         val sender = launch(coroutineContext) {
             for (i in 1..n) q.send(i)
             expect(2)

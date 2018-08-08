@@ -1,10 +1,7 @@
-package channels_new
+package kotlinx.coroutines.experimental.channels_new
 
 import kotlinx.atomicfu.*
 import kotlinx.coroutines.experimental.*
-import kotlinx.coroutines.experimental.channels_new.Channel
-import kotlinx.coroutines.experimental.channels_new.tryResumeCont
-import kotlinx.coroutines.experimental.internal.Symbol
 import kotlinx.coroutines.experimental.internalAnnotations.*
 import kotlinx.coroutines.experimental.suspendAtomicCancellableCoroutine
 
@@ -140,6 +137,6 @@ class RendezvousChannelMSQueue<E> : Channel<E> {
         get() = TODO("not implemented")
 
     private companion object {
-        @JvmField val RECEIVER_ELEMENT = Symbol("RECEIVER_ELEMENT")
+        @JvmField val RECEIVER_ELEMENT = Any()
     }
 }
