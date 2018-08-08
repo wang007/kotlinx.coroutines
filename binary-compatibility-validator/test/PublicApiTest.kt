@@ -9,6 +9,7 @@ import org.junit.rules.*
 import java.io.*
 import java.util.jar.*
 
+@Ignore
 class PublicApiTest {
 
    /*
