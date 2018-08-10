@@ -5,7 +5,7 @@ import java.util.concurrent.Phaser
 import kotlin.test.*
 
 class RendezvousChannelSelectTest {
-    private fun newChannel(): Channel<Int> = RendezvousChannel(segmentSize = 2)
+    private fun newChannel() = RendezvousChannel<Int>(segmentSize = 2)
 
     @Test
     fun `SPSC stress test with select on main and dummy channels`(): Unit = runBlocking {
@@ -86,5 +86,36 @@ class RendezvousChannelSelectTest {
             }
         }
         done.arriveAndAwaitAdvance()
+    }
+
+    @Test
+    fun `check a dummy channel is cleaned after many selects`() {
+        val n = 100_000
+        val q = newChannel()
+        val dummy = newChannel()
+        val done = Phaser(3)
+        // Add an initial waiting continuation to `dummy`
+        launch { dummy.receive() }
+        // Do work
+        launch {
+            repeat(n) { i ->
+                selectUnbiased<Unit> {
+                    q.onSend(i) {}
+                    dummy.onReceive {}
+                }
+            }
+            done.arrive()
+        }
+        launch {
+            repeat(n) { q.receive() }
+            done.arrive()
+        }
+        done.arriveAndAwaitAdvance()
+        // Check that `dummy` channel has at most two node
+        val head = dummy.head()
+        val headNext = head.next()
+        val tail = dummy.tail()
+        assertTrue(head === tail || headNext === tail, "Dummy channel is not cleaned: " +
+                "head=${head.id}, headNext=$headNext, tail=${tail.id}")
     }
 }

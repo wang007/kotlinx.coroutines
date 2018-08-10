@@ -7,31 +7,45 @@ import kotlinx.coroutines.experimental.suspendAtomicCancellableCoroutine
 
 class RendezvousChannel<E>(val spinThreshold: Int = 300, val segmentSize: Int = 32) : Channel<E> {
     // Waiting queue node
-    private class Node(val segmentSize: Int, val id: Long) : Cleanable {
+    internal class Node(@JvmField val segmentSize: Int, @JvmField val id: Long, prev: Node?) : Cleanable {
         // This array contains the data of this segment. In order not to have
         // redundant cache misses, both values to be sent and continuations
         // are stored in the same array at indexes `2i` and `2i+1` respectively.
         private val _data = kotlin.arrayOfNulls<Any?>(segmentSize * 2)
-        // Pointer to the next node in the waiting queue,
-        // maintained similar to the MS queue algorithm.
+        // Pointer to the next node in the waiting queue, maintained similar to
+        // MS queue algorithm. This pointer can be either null, REMOVED_TAIL, `Node`, or `RemovedNode`
+        // depending on the fact if it is logically removed after the cleaning algorithm part.
         private val _next = atomic<Node?>(null)
+        // Counter of cleaned elements. The node should be removed from the waiting queue
+        // (in case it is not a head) when the counter exceeds `segmentSize`.
+        private val _cleaned = atomic(0)
+        // Lazy updated link to the previous node, which is used for cleaning
+        private val _prev = atomic(prev)
 
-        constructor(segmentSize: Int, id: Long, cont: Any, element: Any)
-                : this(segmentSize = segmentSize, id = id)
+        val removed get() = _cleaned.value == segmentSize
+
+        constructor(segmentSize: Int, id: Long, cont: Any, element: Any, prev: Node?)
+                : this(segmentSize = segmentSize, id = id, prev = prev)
         {
             _data[1] = cont
             _data[0] = element
         }
 
+        // This method helps to read a continuation
+        // located by the specified index and helps other threads
+        // to invoke their descriptors if needed. This method should
+        // be invoked after the corresponding element has been read,
+        // so it is guaranteed that the continuation has been stored.
         fun readCont(index: Int): Any {
             while (true) {
-                val cont = getContVolatile(index)!!
+                val cont = getContVolatile(index)!! // can't be null
                 if (cont === TAKEN_CONTINUATION) return TAKEN_CONTINUATION
                 if (cont !is SelectDesc) return cont
                 if (cont.invoke()) { // cont is SelectDesc
-                    putCont(index, TAKEN_CONTINUATION)
+                    putCont(index, TAKEN_CONTINUATION) // idempotent operation
                     return TAKEN_CONTINUATION
                 } else {
+                    // Set the continuation cell to the previous state.
                     casCont(index, cont, cont.anotherCont)
                     return cont.anotherCont
                 }
@@ -39,11 +53,70 @@ class RendezvousChannel<E>(val spinThreshold: Int = 300, val segmentSize: Int = 
         }
 
         override fun clean(index: Int) {
-            // todo implement me
+            // Clean the specified node item and
+            // check if all node items are cleaned.
+            val cont = getCont(index)
+            if (cont == TAKEN_CONTINUATION) return
+            if (!casCont(index, cont, TAKEN_CONTINUATION)) return
+            putElement(index, TAKEN_ELEMENT)
+            if (_cleaned.incrementAndGet() < segmentSize) return
+            // All this node items are cleaned, therefore
+            // it should be removed if only it is not a head.
+            if (_prev.value == null) return // this node is head.
+            // Removing this node
+            remove()
+        }
+
+
+        /**
+         * Removes this node from the waiting queue and clean all references to it.
+         */
+        fun remove() {
+            var next = next() ?: return // tail can't be removed
+            // Find the first non-removed node (tail is always non-removed)
+            while (next.removed) {
+                next = next.next() ?: break
+            }
+            // Find the first non-removed prev and remove the node
+            var prev = _prev.value
+            while (true) {
+                if (prev == null) {
+                    next.movePrevToLeft(null)
+                    return
+                }
+                if (prev.removed) {
+                    prev = prev._prev.value
+                    continue
+                }
+                next.movePrevToLeft(prev)
+                prev.moveNextToRight(next)
+                if (next.removed || !prev.removed) return
+                prev = prev._prev.value
+            }
+        }
+
+        private fun moveNextToRight(next: Node) {
+            while (true) {
+                val curNext = _next.value!!
+                if (next.id <= curNext.id) return
+                if (_next.compareAndSet(curNext, next)) return
+            }
+        }
+
+        private fun movePrevToLeft(prev: Node?) {
+            while (true) {
+                val curPrev = _prev.value ?: return
+                if (prev != null && curPrev.id <= prev.id) return
+                if (_prev.compareAndSet(curPrev, prev)) return
+            }
         }
 
         fun next() = _next.value
         fun casNext(old: Node?, new: Node?) = _next.compareAndSet(old, new)
+
+        fun putPrev(node: Node?) {
+            _prev.lazySet(node)
+        }
 
         inline fun putElementVolatile(index: Int, element: Any) {
             UNSAFE.putObjectVolatile(_data, byteOffset(index * 2), element)
@@ -92,6 +165,9 @@ class RendezvousChannel<E>(val spinThreshold: Int = 300, val segmentSize: Int = 
     private val _head: AtomicRef<Node>
     private val _tail: AtomicRef<Node>
 
+    internal fun head() = _head.value
+    internal fun tail() = _tail.value
+
     // Indexes for deque and enqueue operations on the waiting queue,
     // which indicate positions for deque and enqueue, and their
     // equality means that the waiting queue is empty. These indexes are global,
@@ -103,7 +179,7 @@ class RendezvousChannel<E>(val spinThreshold: Int = 300, val segmentSize: Int = 
     init {
         // Initialize queue with empty node similar to MS queue
         // algorithm, but this node is just empty, not sentinel.
-        val emptyNode = Node(segmentSize, 0)
+        val emptyNode = Node(segmentSize, 0, null)
         _head = atomic(emptyNode)
         _tail = atomic(emptyNode)
     }
@@ -160,6 +236,7 @@ class RendezvousChannel<E>(val spinThreshold: Int = 300, val segmentSize: Int = 
                     // `enqIdx` is not equals (=> greater) than `deqIdx`, what means that
                     // there is at least one more element after this node.
                     val headNext = head.next()!!
+                    headNext.putPrev(null)
                     _head.compareAndSet(head, headNext)
                     continue@try_again
                 }
@@ -167,14 +244,14 @@ class RendezvousChannel<E>(val spinThreshold: Int = 300, val segmentSize: Int = 
                 val deqIdxInNode = indexInNode(deqIdx, segmentSize)
                 val firstElement = readElement(head, deqIdxInNode)
                 // Check that the element is not taken.
-                if (firstElement == TAKEN_ELEMENT) {
+                if (firstElement === TAKEN_ELEMENT) {
                     _deqIdx.compareAndSet(deqIdx, deqIdx + 1)
                     continue@try_again
                 }
                 // Decide should we make a rendezvous or not. The `firstElement` is either sender or receiver.
                 // Check if a rendezvous is possible and try to remove the first element in this case,
                 // try to add the current continuation to the waiting queue otherwise.
-                val makeRendezvous = if (element === RECEIVER_ELEMENT) firstElement != RECEIVER_ELEMENT else firstElement == RECEIVER_ELEMENT
+                val makeRendezvous = if (element === RECEIVER_ELEMENT) firstElement !== RECEIVER_ELEMENT else firstElement === RECEIVER_ELEMENT
                 if (makeRendezvous) {
                     if (tryResumeContinuation(deqIdx, head, deqIdxInNode, element)) {
                         // The rendezvous is happened, congratulations! Resume the current continuation.
@@ -229,6 +306,7 @@ class RendezvousChannel<E>(val spinThreshold: Int = 300, val segmentSize: Int = 
                     // `enqIdx` is not equals (=> greater) than `deqIdx`, what means that
                     // there is at least one more element after this node.
                     val headNext = head.next()!!
+                    headNext.putPrev(null)
                     _head.compareAndSet(head, headNext)
                     continue@try_again
                 }
@@ -236,14 +314,14 @@ class RendezvousChannel<E>(val spinThreshold: Int = 300, val segmentSize: Int = 
                 val deqIdxInNode = indexInNode(deqIdx, segmentSize)
                 val firstElement = readElement(head, deqIdxInNode)
                 // Check that the element is not taken.
-                if (firstElement == TAKEN_ELEMENT) {
+                if (firstElement === TAKEN_ELEMENT) {
                     _deqIdx.compareAndSet(deqIdx, deqIdx + 1)
                     continue@try_again
                 }
                 // Decide should we make a rendezvous or not. The `firstElement` is either sender or receiver.
                 // Check if a rendezvous is possible and try to remove the first element in this case,
                 // try to add the current continuation to the waiting queue otherwise.
-                val makeRendezvous = if (element === RECEIVER_ELEMENT) firstElement != RECEIVER_ELEMENT else firstElement == RECEIVER_ELEMENT
+                val makeRendezvous = if (element === RECEIVER_ELEMENT) firstElement !== RECEIVER_ELEMENT else firstElement === RECEIVER_ELEMENT
                 if (makeRendezvous) {
                     if (tryResumeContinuation(deqIdx, head, deqIdxInNode, element)) {
                         // The rendezvous is happened, congratulations! Resume the first element.
@@ -305,28 +383,25 @@ class RendezvousChannel<E>(val spinThreshold: Int = 300, val segmentSize: Int = 
     // Adds a new node with the specified continuation and element to the tail. Works similar to MS queue algorithm,
     // but updates `_enqIdx` in addition to the tail pointer. Return the added node on success, `null` otherwise.
     private fun addNewNode(enqIdx: Long, tail: Node, cont: Any, element: Any): Node? {
-        // If next node is not null, help to move the tail pointer.
-        val tailNext = tail.next()
-        if (tailNext != null) {
-            // If this CAS fails, another thread moved the tail pointer.
-            _tail.compareAndSet(tail, tailNext)
-            _enqIdx.compareAndSet(enqIdx, enqIdx + 1)
-            return null
-        }
-        // Create a new node with this continuation and element and try to add it
-        val node = Node(segmentSize, tail.id + 1, cont, element)
-        if (tail.casNext(null, node)) {
-            // New node has been added, try to move `_tail`
-            // and `_enqIdx` forward. If the CAS fails, another thread moved it.
-            _tail.compareAndSet(tail, node)
-            _enqIdx.compareAndSet(enqIdx, enqIdx + 1)
-            return node
-        } else {
-            // Next node is not null, help to move the tail pointer and `_enqIdx`.
-            val tailNext = tail.next()!!
-            _tail.compareAndSet(tail, tailNext)
-            _enqIdx.compareAndSet(enqIdx, enqIdx + 1)
-            return null
+        while (true) {
+            // If next node is not null, help to move the tail pointer.
+            val tailNext = tail.next()
+            if (tailNext != null) {
+                // If this CAS fails, another thread moved the tail pointer.
+                _tail.compareAndSet(tail, tailNext)
+                _enqIdx.compareAndSet(enqIdx, enqIdx + 1)
+                return null
+            }
+            // Create a new node with this continuation and element and try to add it
+            val newTail = Node(segmentSize, tail.id + 1, cont, element, tail)
+            if (tail.casNext(null, newTail)) {
+                // New node has been added, try to move `_tail`
+                // and `_enqIdx` forward. If the CAS fails, another thread moved it.
+                _tail.compareAndSet(tail, newTail)
+                _enqIdx.compareAndSet(enqIdx, enqIdx + 1)
+                if (tail.removed) tail.remove()
+                return newTail
+            } else continue
         }
     }
 
@@ -412,6 +487,7 @@ class RendezvousChannel<E>(val spinThreshold: Int = 300, val segmentSize: Int = 
                     // `enqIdx` is not equals (=> greater) than `deqIdx`, what means that
                     // there is at least one more element after this node.
                     val headNext = head.next()!!
+                    headNext.putPrev(null)
                     _head.compareAndSet(head, headNext)
                     continue@try_again
                 }
@@ -419,14 +495,14 @@ class RendezvousChannel<E>(val spinThreshold: Int = 300, val segmentSize: Int = 
                 val deqIdxInNode = indexInNode(deqIdx, segmentSize)
                 val firstElement = readElement(head, deqIdxInNode)
                 // Check that the element is not taken.
-                if (firstElement == TAKEN_ELEMENT) {
+                if (firstElement === TAKEN_ELEMENT) {
                     _deqIdx.compareAndSet(deqIdx, deqIdx + 1)
                     continue@try_again
                 }
                 // Decide should we make a rendezvous or not. The `firstElement` is either sender or receiver.
                 // Check if a rendezvous is possible and try to remove the first element in this case,
                 // try to add the current continuation to the waiting queue otherwise.
-                val makeRendezvous = if (element === RECEIVER_ELEMENT) firstElement != RECEIVER_ELEMENT else firstElement == RECEIVER_ELEMENT
+                val makeRendezvous = if (element === RECEIVER_ELEMENT) firstElement !== RECEIVER_ELEMENT else firstElement === RECEIVER_ELEMENT
                 if (makeRendezvous) {
                     if (tryResumeContinuationForSelect(deqIdx, head, deqIdxInNode, element, selectInstance)) {
                         // The rendezvous is happened, congratulations! Resume the current continuation.
@@ -494,7 +570,7 @@ class RendezvousChannel<E>(val spinThreshold: Int = 300, val segmentSize: Int = 
         }
     }
 
-    private companion object {
+    internal companion object {
         @JvmField val UNSAFE = UtilUnsafe.unsafe
         @JvmField val base = UNSAFE.arrayBaseOffset(Array<Any>::class.java)
         @JvmField val shift = 31 - Integer.numberOfLeadingZeros(UNSAFE.arrayIndexScale(Array<Any>::class.java))
@@ -506,6 +582,7 @@ class RendezvousChannel<E>(val spinThreshold: Int = 300, val segmentSize: Int = 
         @JvmField val RECEIVER_ELEMENT = Any()
         @JvmField val TAKEN_CONTINUATION = Any()
         @JvmField val TAKEN_ELEMENT = Any()
+        @JvmField val REMOVED_TAIL = Any()
 
         @JvmStatic private fun <FUNC_RESULT> actOnSendAndOnReceive(result: Any?, block: (FUNC_RESULT) -> Any?): Any? {
             when {

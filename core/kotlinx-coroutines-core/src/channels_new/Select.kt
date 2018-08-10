@@ -31,24 +31,24 @@ interface SelectBuilder<RESULT> {
 typealias RegFunc = Function3<RendezvousChannel<*>, SelectInstance<*>, Any?, RegResult?>
 
 class Param0RegInfo<FUNC_RESULT>(
-        val channel: Any,
-        val regFunc: RegFunc,
-        val actFunc: ActFunc<FUNC_RESULT>
+        @JvmField val channel: Any,
+        @JvmField val regFunc: RegFunc,
+        @JvmField val actFunc: ActFunc<FUNC_RESULT>
 )
 
 class Param1RegInfo<FUNC_RESULT>(
-        val channel: Any,
-        val regFunc: RegFunc,
-        val actFunc: ActFunc<FUNC_RESULT>
+        @JvmField val channel: Any,
+        @JvmField val regFunc: RegFunc,
+        @JvmField val actFunc: ActFunc<FUNC_RESULT>
 )
 
-class RegResult(val cleanable: Cleanable, val index: Int)
+class RegResult(@JvmField val cleanable: Cleanable, @JvmField val index: Int)
 
 // continuation, result (usually a received element), block
 typealias ActFunc<FUNC_RESULT> = Function2<Any?, Function1<FUNC_RESULT, Any?>, Any?>
 
 class SelectInstance<RESULT> : SelectBuilder<RESULT> {
-    val id = selectInstanceIdGenerator.incrementAndGet()
+    @JvmField val id = selectInstanceIdGenerator.incrementAndGet()
     private val alternatives = ArrayList<Any?>()
 
     lateinit var cont: CancellableContinuation<in Any>
@@ -124,7 +124,7 @@ class SelectInstance<RESULT> : SelectBuilder<RESULT> {
     private fun readState(allowedUnprocessedDesc: Any?): Any? {
         while (true) { // CAS loop
             val state = _state.value
-            if (state == null || state == allowedUnprocessedDesc || state !is SelectDesc)
+            if (state === null || state === allowedUnprocessedDesc || state !is SelectDesc)
                 return state
             if (state.invoke()) {
                 return state
@@ -137,7 +137,7 @@ class SelectInstance<RESULT> : SelectBuilder<RESULT> {
     fun trySetDescriptor(desc: Any): Boolean {
         while (true) {
             val state = readState(desc)
-            if (state == desc) return true
+            if (state === desc) return true
             if (state != null) return false
             if (_state.compareAndSet(null, desc)) return true
         }
@@ -193,8 +193,8 @@ class SelectInstance<RESULT> : SelectBuilder<RESULT> {
     }
 }
 
-class SelectDesc(val channel: Any, val selectInstance: SelectInstance<*>, val anotherCont: Any) {
-    @Volatile var _status: Byte = STATUS_UNDECIDED
+class SelectDesc(@JvmField val channel: Any, @JvmField val selectInstance: SelectInstance<*>, @JvmField val anotherCont: Any) {
+    @JvmField @Volatile var _status: Byte = STATUS_UNDECIDED
 
     fun invoke(): Boolean {
         // Optimization: check this descriptor's status.
