@@ -20,7 +20,7 @@ class ExperimentalCoroutineDispatcher(
     private val idleWorkerKeepAliveNs: Long
 ) : CoroutineDispatcher(), Delay, Closeable {
     constructor(
-        corePoolSize: Int = 1,
+        corePoolSize: Int = CORE_POOL_SIZE,
         maxPoolSize: Int = MAX_POOL_SIZE
     ) : this(
         corePoolSize,

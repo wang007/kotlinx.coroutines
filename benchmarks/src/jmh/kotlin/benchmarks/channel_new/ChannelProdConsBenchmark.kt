@@ -11,8 +11,8 @@ import java.util.concurrent.Phaser
 import java.util.concurrent.TimeUnit
 import kotlin.math.max
 
-@Warmup(iterations = 1, time = 500, timeUnit = TimeUnit.MICROSECONDS)
-@Measurement(iterations = 3, time = 500, timeUnit = TimeUnit.MICROSECONDS)
+@Warmup(iterations = 3, time = 500, timeUnit = TimeUnit.MICROSECONDS)
+@Measurement(iterations = 10, time = 500, timeUnit = TimeUnit.MICROSECONDS)
 @Fork(value = 1)
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
@@ -29,7 +29,7 @@ open class ChannelProdConsBenchmark {
 
     @Setup
     fun setup() {
-        dispatcher = ExperimentalCoroutineDispatcher(maxPoolSize = _3_parallelism)
+        dispatcher = ExperimentalCoroutineDispatcher(corePoolSize = _3_parallelism)
     }
 
     @Benchmark
