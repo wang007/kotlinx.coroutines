@@ -22,8 +22,7 @@ open class ChannelProdConsBenchmark {
     private var _1_withSelect: Boolean = false
     @Param("0", "1000")
     private var _2_coroutines: Int = 0
-    //    @Param("1", "2", "4", "6", "8", "12", "16", "18", "24", "32", "36", "48", "64", "72", "96", "108", "128", "144")
-    @Param("1", "2", "4")
+        @Param("1", "2", "4", "6", "8", "12", "16", "18", "24", "32", "36", "48", "64", "72", "96", "108", "128", "144")
     private var _3_parallelism: Int = 0
 
     private lateinit var dispatcher: CoroutineDispatcher

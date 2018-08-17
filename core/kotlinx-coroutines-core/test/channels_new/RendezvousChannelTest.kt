@@ -101,7 +101,7 @@ abstract class AbstractRendezvousChannelTest : TestBase() {
 }
 
 class RendezvousChannelTest  : AbstractRendezvousChannelTest() {
-    override fun newChannel() = RendezvousChannel<Int>(segmentSize = 2)
+    override fun newChannel() = RendezvousChannel<Int>()
 }
 
 class RendezvousChannelMSQueueTest  : AbstractRendezvousChannelTest() {

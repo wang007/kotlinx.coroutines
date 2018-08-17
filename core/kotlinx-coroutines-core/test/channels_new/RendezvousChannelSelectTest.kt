@@ -5,7 +5,7 @@ import java.util.concurrent.Phaser
 import kotlin.test.*
 
 class RendezvousChannelSelectTest {
-    private fun newChannel() = RendezvousChannel<Int>(segmentSize = 2)
+    private fun newChannel() = RendezvousChannel<Int>()
 
     @Test
     fun `SPSC stress test with select on main and dummy channels`(): Unit = runBlocking {
