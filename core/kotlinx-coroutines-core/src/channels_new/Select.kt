@@ -221,7 +221,7 @@ class SelectDesc(@JvmField val channel: Any, @JvmField val selectInstance: Selec
         } else {
             anotherCont as CancellableContinuation<*>
             if (!selectInstance.trySetDescriptor(this)) {
-                return false
+                failed = true
             }
         }
         // Check if failed

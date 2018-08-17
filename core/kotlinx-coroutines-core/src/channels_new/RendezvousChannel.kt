@@ -5,7 +5,7 @@ import kotlinx.coroutines.experimental.*
 import kotlinx.coroutines.experimental.internalAnnotations.*
 import kotlinx.coroutines.experimental.suspendAtomicCancellableCoroutine
 
-class RendezvousChannel<E>(val spinThreshold: Int = 300, val segmentSize: Int = 32) : Channel<E> {
+class RendezvousChannel<E>(val spinThreshold: Int = 300) : Channel<E> {
     // Waiting queue node
     internal class Node(@JvmField val segmentSize: Int, @JvmField val id: Long, prev: Node?) : Cleanable {
         // This array contains the data of this segment. In order not to have
@@ -60,9 +60,6 @@ class RendezvousChannel<E>(val spinThreshold: Int = 300, val segmentSize: Int = 
             if (!casCont(index, cont, TAKEN_CONTINUATION)) return
             putElement(index, TAKEN_ELEMENT)
             if (_cleaned.incrementAndGet() < segmentSize) return
-            // All this node items are cleaned, therefore
-            // it should be removed if only it is not a head.
-            if (_prev.value == null) return // this node is head.
             // Removing this node
             remove()
         }
@@ -376,7 +373,7 @@ class RendezvousChannel<E>(val spinThreshold: Int = 300, val segmentSize: Int = 
             return if (addedNode != null) RegResult(addedNode, 0) else null
         } else {
             return if (storeContinuation(enqIdx, tail, enqIdxInNode, cont, element)) RegResult(tail, enqIdxInNode)
-                   else null
+                else null
         }
     }
 
@@ -592,3 +589,5 @@ class RendezvousChannel<E>(val spinThreshold: Int = 300, val segmentSize: Int = 
         }
     }
 }
+
+const val segmentSize = 32

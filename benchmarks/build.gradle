@@ -3,7 +3,7 @@
  */
 
 plugins {
-    id "me.champeau.gradle.jmh" version "0.4.4"
+    id "me.champeau.gradle.jmh" version "0.4.7"
 }
 
 repositories {
@@ -18,11 +18,14 @@ dependencies {
     jmh project(':kotlinx-coroutines-io')
 }
 
-jmh.jmhVersion = '1.19'
+jmh.jmhVersion = '1.21'
 
 jmhJar.archiveName = 'benchmarks.jar'
 
-//jmh {
-//    include = ['.*Channel.*Benchmark']
+jmh {
+    forceGC = true
+    failOnError = true
+    resultFormat = 'CSV'
+    include = ['.*channel_new.*']
 //    exclude = ['.*Guice.*', '.*PingPong.*']
-//}
+}
