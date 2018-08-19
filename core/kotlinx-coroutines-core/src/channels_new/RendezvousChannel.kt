@@ -436,7 +436,8 @@ class RendezvousChannel<E> : Channel<E> {
         } else {
             anotherCont as SelectInstance<*>
             if (!anotherCont.trySetDescriptor(this)) return false
-            return anotherCont.cont.tryResumeCont(contResult)
+            anotherCont.cont.resume(contResult)
+            return true
         }
     }
 
@@ -556,7 +557,8 @@ class RendezvousChannel<E> : Channel<E> {
             return anotherCont.tryResumeCont(contResult)
         } else {
             anotherCont as SelectInstance<*>
-            return anotherCont.cont.tryResumeCont(contResult)
+            anotherCont.cont.resume(contResult)
+            return true
         }
     }
 

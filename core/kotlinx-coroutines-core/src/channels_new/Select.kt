@@ -2,10 +2,11 @@ package kotlinx.coroutines.experimental.channels_new
 
 import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.experimental.CancellableContinuation
-import kotlinx.coroutines.experimental.suspendAtomicCancellableCoroutine
 import java.util.*
 import java.util.concurrent.ThreadLocalRandom
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.coroutines.experimental.Continuation
+import kotlin.coroutines.experimental.suspendCoroutine
 
 suspend inline fun <R> select(crossinline builder: SelectBuilder<R>.() -> Unit): R {
     val select = SelectInstance<R>()
@@ -51,7 +52,7 @@ class SelectInstance<RESULT> : SelectBuilder<RESULT> {
     @JvmField val id = selectInstanceIdGenerator.incrementAndGet()
     private val alternatives = ArrayList<Any?>()
 
-    lateinit var cont: CancellableContinuation<in Any>
+    lateinit var cont: Continuation<in Any>
     private val _state = atomic<Any?>(null)
 
     override fun <FUNC_RESULT> Param0RegInfo<FUNC_RESULT>.invoke(block: (FUNC_RESULT) -> RESULT) {
@@ -102,7 +103,7 @@ class SelectInstance<RESULT> : SelectBuilder<RESULT> {
      * After this function is invoked it is guaranteed that an alternative is selected
      * and the corresponding channel is stored into `_state` field.
      */
-    private suspend fun selectAlternative(): Any? = suspendAtomicCancellableCoroutine sc@ { curCont ->
+    private suspend fun selectAlternative(): Any? = suspendCoroutine sc@ { curCont ->
         this.cont = curCont
         for (i in 0 until alternatives.size step ALTERNATIVE_SIZE) {
             val channel = alternatives[i]!!
