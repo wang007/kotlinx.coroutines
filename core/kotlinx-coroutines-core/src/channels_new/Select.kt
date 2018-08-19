@@ -28,7 +28,7 @@ interface SelectBuilder<RESULT> {
 }
 
 // channel, selectInstance, element -> is selected by this alternative
-typealias RegFunc = Function4<RendezvousChannel<*>, SelectInstance<*>, Any?, Boolean, RegResult?>
+typealias RegFunc = Function3<RendezvousChannel<*>, SelectInstance<*>, Any?, RegResult?>
 
 class Param0RegInfo<FUNC_RESULT>(
         @JvmField val channel: Any,
@@ -43,9 +43,6 @@ class Param1RegInfo<FUNC_RESULT>(
 )
 
 class RegResult(@JvmField val cleanable: Cleanable, @JvmField val index: Int)
-val dummyRegResult = RegResult(object: Cleanable{
-    override fun clean(index: Int) {}
-}, -1)
 
 // continuation, result (usually a received element), block
 typealias ActFunc<FUNC_RESULT> = Function2<Any?, Function1<FUNC_RESULT, Any?>, Any?>
@@ -56,10 +53,6 @@ class SelectInstance<RESULT> : SelectBuilder<RESULT> {
 
     lateinit var cont: CancellableContinuation<in Any>
     private val _state = atomic<Any?>(null)
-
-    fun setState(value: Any?) {
-        _state.value = value
-    }
 
     override fun <FUNC_RESULT> Param0RegInfo<FUNC_RESULT>.invoke(block: (FUNC_RESULT) -> RESULT) {
         addAlternative(channel, null, regFunc, actFunc, block)
@@ -109,35 +102,20 @@ class SelectInstance<RESULT> : SelectBuilder<RESULT> {
      * After this function is invoked it is guaranteed that an alternative is selected
      * and the corresponding channel is stored into `_state` field.
      */
-    private suspend fun selectAlternative(): Any? {
+    private suspend fun selectAlternative(): Any? = suspendAtomicCancellableCoroutine sc@ { curCont ->
+        this.cont = curCont
         for (i in 0 until alternatives.size step ALTERNATIVE_SIZE) {
             val channel = alternatives[i]!!
             val param = alternatives[i + 1]
             val regFunc = alternatives[i + 2]
             regFunc as RegFunc
             channel as RendezvousChannel<*> // todo FIX TYPES
-            val regResult = regFunc(channel, this, param, false)
-            if (regResult == null) {
-                val res = _state.value
-                _state.value = channel
-                return res
+            val regResult = regFunc(channel, this, param)
+            if (regResult != null) {
+                alternatives[i + 6] = regResult.index
+                alternatives[i + 5] = regResult.cleanable
             }
-        }
-        return suspendAtomicCancellableCoroutine sc@ { curCont ->
-            this.cont = curCont
-            for (i in 0 until alternatives.size step ALTERNATIVE_SIZE) {
-                val channel = alternatives[i]!!
-                val param = alternatives[i + 1]
-                val regFunc = alternatives[i + 2]
-                regFunc as RegFunc
-                channel as RendezvousChannel<*> // todo FIX TYPES
-                val regResult = regFunc(channel, this, param, true)
-                if (regResult != null) {
-                    alternatives[i + 6] = regResult.index
-                    alternatives[i + 5] = regResult.cleanable
-                }
-                if (isSelected()) return@sc
-            }
+            if (isSelected()) return@sc
         }
     }
 

@@ -446,12 +446,10 @@ class RendezvousChannel<E> : Channel<E> {
     override val onReceive: Param0RegInfo<E>
         get() = Param0RegInfo<E>(this, RendezvousChannel<*>::regSelectReceive, ::actOnSendAndOnReceive)
 
-    private fun regSelectSend(selectInstance: SelectInstance<*>, element: Any?, suspend: Boolean) =
-            regSelect(selectInstance, element!!, suspend)
-    private fun regSelectReceive(selectInstance: SelectInstance<*>, element: Any?, suspend: Boolean) =
-            regSelect(selectInstance, RECEIVER_ELEMENT, suspend)
+    private fun regSelectSend(selectInstance: SelectInstance<*>, element: Any?) = regSelect(selectInstance, element!!)
+    private fun regSelectReceive(selectInstance: SelectInstance<*>, element: Any?) = regSelect(selectInstance, RECEIVER_ELEMENT)
 
-    private fun regSelect(selectInstance: SelectInstance<*>, element: Any, suspend: Boolean): RegResult? {
+    private fun regSelect(selectInstance: SelectInstance<*>, element: Any): RegResult? {
         try_again@ while (true) { // CAS loop
             if (selectInstance.isSelected()) return null
             var enqIdx = _enqIdx.value
@@ -460,7 +458,6 @@ class RendezvousChannel<E> : Channel<E> {
             if (enqIdx < deqIdx) continue@try_again
             // Check if the waiting queue is empty.
             if (deqIdx == enqIdx) {
-                if (!suspend) return dummyRegResult
                 val regRes = addToWaitingQueue(enqIdx, element, selectInstance)
                 if (regRes != null) return regRes else continue@try_again
             } else { // Queue is not empty.
@@ -500,19 +497,25 @@ class RendezvousChannel<E> : Channel<E> {
                     if (tryResumeContinuationForSelect(deqIdx, head, deqIdxInNode, element, selectInstance)) {
                         // The rendezvous is happened, congratulations! Resume the current continuation.
                         val result = (if (element === RECEIVER_ELEMENT) firstElement else Unit)
-                        if (suspend) {
-                            selectInstance.cont.resume(result)
-                        } else {
-                            selectInstance.setState(result)
-                        }
+                        selectInstance.cont.resume(result)
+                        return null
+                    } else if (selectInstance.isSelected()) {
                         return null
                     } else continue@try_again
                 } else {
-                    if (!suspend) return dummyRegResult
                     // Store `_deqIdx` value which has been seen
                     // at the point of deciding not to make a  rendezvous.
-                    val regRes = addToWaitingQueue(enqIdx, element, selectInstance)
-                    if (regRes != null) return regRes
+                    val deqIdxLimit = enqIdx
+                    while (true) {
+                        val regRes = addToWaitingQueue(enqIdx, element, selectInstance)
+                        if (regRes != null) return regRes
+                        // Re-read `_enqIdx` and `_deqIdx` and try to add the current continuation
+                        // to the waiting queue if `deqIdx` is less than `_enqIdx` at the point of deciding not to make a
+                        // rendezvous.
+                        enqIdx = _enqIdx.value
+                        deqIdx = _deqIdx.value
+                        if (deqIdx >= deqIdxLimit) continue@try_again
+                    }
                 }
             }
         }
