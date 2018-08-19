@@ -5,7 +5,7 @@ import kotlinx.coroutines.experimental.*
 import kotlinx.coroutines.experimental.internalAnnotations.*
 import kotlinx.coroutines.experimental.suspendAtomicCancellableCoroutine
 
-class RendezvousChannel<E>(val spinThreshold: Int = 300) : Channel<E> {
+class RendezvousChannel<E> : Channel<E> {
     // Waiting queue node
     internal class Node(@JvmField val segmentSize: Int, @JvmField val id: Long, prev: Node?) : Cleanable {
         // This array contains the data of this segment. In order not to have
@@ -335,21 +335,14 @@ class RendezvousChannel<E>(val spinThreshold: Int = 300) : Channel<E> {
     // and returns `TAKEN_ELEMENT` if the element is unavailable.
     private fun readElement(node: Node, index: Int): Any {
         // Spin wait on the slot.
-        var element = node.getElementVolatile(index)
-        var attempt = 0
-        do {
-            if (attempt % 16 == 0) {
-                if (element != null) return element
-                element = node.getElementVolatile(index)
-            }
-            attempt++
-        } while (attempt < spinThreshold)
+        val element = node.getElementVolatile(index)
+        if (element != null) return element
         // Cannot spin forever, mark the slot as broken if it is still unavailable.
-        if (node.casElement(index, null, TAKEN_ELEMENT)) {
-            return TAKEN_ELEMENT
+        return if (node.casElement(index, null, TAKEN_ELEMENT)) {
+            TAKEN_ELEMENT
         } else {
             // The element is set, read it and return.
-            return node.getElementVolatile(index)!!
+            node.getElementVolatile(index)!!
         }
     }
 
@@ -453,10 +446,12 @@ class RendezvousChannel<E>(val spinThreshold: Int = 300) : Channel<E> {
     override val onReceive: Param0RegInfo<E>
         get() = Param0RegInfo<E>(this, RendezvousChannel<*>::regSelectReceive, ::actOnSendAndOnReceive)
 
-    private fun regSelectSend(selectInstance: SelectInstance<*>, element: Any?) = regSelect(selectInstance, element!!)
-    private fun regSelectReceive(selectInstance: SelectInstance<*>, element: Any?) = regSelect(selectInstance, RECEIVER_ELEMENT)
+    private fun regSelectSend(selectInstance: SelectInstance<*>, element: Any?, suspend: Boolean) =
+            regSelect(selectInstance, element!!, suspend)
+    private fun regSelectReceive(selectInstance: SelectInstance<*>, element: Any?, suspend: Boolean) =
+            regSelect(selectInstance, RECEIVER_ELEMENT, suspend)
 
-    private fun regSelect(selectInstance: SelectInstance<*>, element: Any): RegResult? {
+    private fun regSelect(selectInstance: SelectInstance<*>, element: Any, suspend: Boolean): RegResult? {
         try_again@ while (true) { // CAS loop
             if (selectInstance.isSelected()) return null
             var enqIdx = _enqIdx.value
@@ -465,6 +460,7 @@ class RendezvousChannel<E>(val spinThreshold: Int = 300) : Channel<E> {
             if (enqIdx < deqIdx) continue@try_again
             // Check if the waiting queue is empty.
             if (deqIdx == enqIdx) {
+                if (!suspend) return dummyRegResult
                 val regRes = addToWaitingQueue(enqIdx, element, selectInstance)
                 if (regRes != null) return regRes else continue@try_again
             } else { // Queue is not empty.
@@ -504,25 +500,19 @@ class RendezvousChannel<E>(val spinThreshold: Int = 300) : Channel<E> {
                     if (tryResumeContinuationForSelect(deqIdx, head, deqIdxInNode, element, selectInstance)) {
                         // The rendezvous is happened, congratulations! Resume the current continuation.
                         val result = (if (element === RECEIVER_ELEMENT) firstElement else Unit)
-                        selectInstance.cont.resume(result)
-                        return null
-                    } else if (selectInstance.isSelected()) {
+                        if (suspend) {
+                            selectInstance.cont.resume(result)
+                        } else {
+                            selectInstance.setState(result)
+                        }
                         return null
                     } else continue@try_again
                 } else {
+                    if (!suspend) return dummyRegResult
                     // Store `_deqIdx` value which has been seen
                     // at the point of deciding not to make a  rendezvous.
-                    val deqIdxLimit = enqIdx
-                    while (true) {
-                        val regRes = addToWaitingQueue(enqIdx, element, selectInstance)
-                        if (regRes != null) return regRes
-                        // Re-read `_enqIdx` and `_deqIdx` and try to add the current continuation
-                        // to the waiting queue if `deqIdx` is less than `_enqIdx` at the point of deciding not to make a
-                        // rendezvous.
-                        enqIdx = _enqIdx.value
-                        deqIdx = _deqIdx.value
-                        if (deqIdx >= deqIdxLimit) continue@try_again
-                    }
+                    val regRes = addToWaitingQueue(enqIdx, element, selectInstance)
+                    if (regRes != null) return regRes
                 }
             }
         }

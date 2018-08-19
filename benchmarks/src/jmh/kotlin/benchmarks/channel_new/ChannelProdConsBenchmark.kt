@@ -1,8 +1,7 @@
 package benchmarks.channel_new
 
 import kotlinx.coroutines.experimental.CoroutineDispatcher
-import kotlinx.coroutines.experimental.channels_new.RendezvousChannel
-import kotlinx.coroutines.experimental.channels_new.select
+import kotlinx.coroutines.experimental.channels_new.*
 import kotlinx.coroutines.experimental.launch
 import kotlinx.coroutines.experimental.scheduling.ExperimentalCoroutineDispatcher
 import org.openjdk.jmh.annotations.*
@@ -22,7 +21,7 @@ open class ChannelProdConsBenchmark {
     private var _1_withSelect: Boolean = false
     @Param("0", "1000")
     private var _2_coroutines: Int = 0
-        @Param("1", "2", "4", "6", "8", "12", "16", "18", "24", "32", "36", "48", "64", "72", "96", "108", "128", "144")
+    @Param("192, 256, 320")
     private var _3_parallelism: Int = 0
 
     private lateinit var dispatcher: CoroutineDispatcher
@@ -103,7 +102,7 @@ open class ChannelProdConsBenchmark {
         phaser.arriveAndAwaitAdvance()
     }
 
-    private suspend fun produceNew(c: RendezvousChannel<Int>,  it: Int, dummy: RendezvousChannel<Int>?) {
+    private suspend fun produceNew(c: Channel<Int>,  it: Int, dummy: Channel<Int>?) {
         if (_1_withSelect) {
             select<Unit> {
                 c.onSend(it) {}
@@ -115,7 +114,7 @@ open class ChannelProdConsBenchmark {
         Blackhole.consumeCPU(work)
     }
 
-    private suspend fun produceOld(c: kotlinx.coroutines.experimental.channels.RendezvousChannel<Int>,  it: Int, dummy: kotlinx.coroutines.experimental.channels.RendezvousChannel<Int>?) {
+    private suspend fun produceOld(c: kotlinx.coroutines.experimental.channels.Channel<Int>,  it: Int, dummy: kotlinx.coroutines.experimental.channels.Channel<Int>?) {
         if (_1_withSelect) {
             kotlinx.coroutines.experimental.selects.select<Unit> {
                 c.onSend(it) {}
@@ -127,7 +126,7 @@ open class ChannelProdConsBenchmark {
         Blackhole.consumeCPU(work)
     }
 
-    private suspend fun consumeNew(c: RendezvousChannel<Int>, dummy: RendezvousChannel<Int>?) {
+    private suspend fun consumeNew(c: Channel<Int>, dummy: Channel<Int>?) {
         if (_1_withSelect) {
             select<Unit> {
                 c.onReceive {}
@@ -139,7 +138,7 @@ open class ChannelProdConsBenchmark {
         Blackhole.consumeCPU(work)
     }
 
-    private suspend fun consumeOld(c: kotlinx.coroutines.experimental.channels.RendezvousChannel<Int>, dummy: kotlinx.coroutines.experimental.channels.RendezvousChannel<Int>?) {
+    private suspend fun consumeOld(c: kotlinx.coroutines.experimental.channels.Channel<Int>, dummy: kotlinx.coroutines.experimental.channels.Channel<Int>?) {
         if (_1_withSelect) {
             kotlinx.coroutines.experimental.selects.select<Unit> {
                 c.onReceive {}
@@ -151,7 +150,7 @@ open class ChannelProdConsBenchmark {
         Blackhole.consumeCPU(work)
     }
 
-    private fun newChannel() = RendezvousChannel<Int>(spinThreshold = 0)
+    private fun newChannel() = RendezvousChannel<Int>()
 }
 
 const val newAlgo = true
