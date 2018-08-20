@@ -17,11 +17,13 @@ import kotlin.math.max
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @State(Scope.Benchmark)
 open class ChannelProdConsBenchmark {
+    @Param("false, true")
+    private var _0_newAlgo: Boolean = false
     @Param("false", "true")
     private var _1_withSelect: Boolean = false
-    @Param("0", "1000")
+    @Param("1000", "10000")
     private var _2_coroutines: Int = 0
-    @Param("192, 256, 320")
+    @Param("1")
     private var _3_parallelism: Int = 0
 
     private lateinit var dispatcher: CoroutineDispatcher
@@ -36,14 +38,14 @@ open class ChannelProdConsBenchmark {
         if (_2_coroutines != 0) return
         val producers = max(1, _3_parallelism - 1)
         val consumers = 1
-        if (newAlgo) runNew(producers, consumers) else runOld(producers, consumers)
+        if (_0_newAlgo) runNew(producers, consumers) else runOld(producers, consumers)
     }
 
     @Benchmark
     fun mpmc() {
         val producers = if (_2_coroutines == 0) (_3_parallelism + 1) / 2 else _2_coroutines / 2
         val consumers = producers
-        if (newAlgo) runNew(producers, consumers) else runOld(producers, consumers)
+        if (_0_newAlgo) runNew(producers, consumers) else runOld(producers, consumers)
     }
 
     fun runOld(producers: Int, consumers: Int) {
@@ -153,6 +155,5 @@ open class ChannelProdConsBenchmark {
     private fun newChannel() = RendezvousChannel<Int>()
 }
 
-const val newAlgo = true
 const val work = 100L
 const val approxBatchSize = 100000
