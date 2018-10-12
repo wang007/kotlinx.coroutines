@@ -13,9 +13,4 @@ package kotlinx.coroutines.experimental.channels
  *
  * This implementation is fully lock-free.
  */
-public open class RendezvousChannel<E> : AbstractChannel<E>() {
-    protected final override val isBufferAlwaysEmpty: Boolean get() = true
-    protected final override val isBufferEmpty: Boolean get() = true
-    protected final override val isBufferAlwaysFull: Boolean get() = true
-    protected final override val isBufferFull: Boolean get() = true
-}
+public open class RendezvousChannel<E> : Channel<E> by BufferedChannel<E>(0)

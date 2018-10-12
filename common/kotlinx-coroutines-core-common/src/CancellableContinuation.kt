@@ -262,6 +262,7 @@ internal class CancellableContinuationImpl<in T>(
     delegate: Continuation<T>,
     resumeMode: Int
 ) : AbstractContinuation<T>(delegate, resumeMode), CancellableContinuation<T>, Runnable {
+    var element: Any? = null
 
     public override val context: CoroutineContext = delegate.context
 
