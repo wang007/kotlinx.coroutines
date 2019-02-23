@@ -24,7 +24,7 @@ import kotlin.jvm.*
  * Coroutine context is inherited from a [CoroutineScope], additional context elements can be specified with [context] argument.
  * If the context does not have any dispatcher nor any other [ContinuationInterceptor], then [Dispatchers.Default] is used.
  * The parent job is inherited from a [CoroutineScope] as well, but it can also be overridden
- * with corresponding [coroutineContext] element.
+ * by a job specified in the [context].
  *
  * By default, the coroutine is immediately scheduled for execution.
  * Other start options can be specified via `start` parameter. See [CoroutineStart] for details.
@@ -32,9 +32,55 @@ import kotlin.jvm.*
  * the coroutine [Job] is created in _new_ state. It can be explicitly started with [start][Job.start] function
  * and will be started implicitly on the first invocation of [join][Job.join].
  *
- * Uncaught exceptions in this coroutine cancel parent job in the context by default
- * (unless [CoroutineExceptionHandler] is explicitly specified), which means that when `launch` is used with
- * the context of another coroutine, then any uncaught exception leads to the cancellation of parent coroutine.
+ * ### Exception handling
+ *
+ * _Uncaught exception_ in this coroutine cancels parent job in the context,
+ * which means that when `launch` is used within the context of another coroutine,
+ * then any uncaught exception leads to the cancellation of the parent coroutine.
+ * If a coroutine has no parent (if it was started from [GlobalScope] or a [Job] is its context
+ * was explicitly overridden by either [NonCancellable] or `Job()`), then uncaught exceptions
+ * a handled by [CoroutineExceptionHandler] in its context.
+ *
+ * In order to catch exception that occurs inside the launched coroutine and all its children, the body
+ * of the coroutine has to be wrapped in the following way:
+ *
+ * ```
+ * val job = launch {
+ *    try {
+ *        coroutineScope { // to catch all children exceptions
+ *            // ... body of the coroutine ...
+ *        }
+ *    } catch (e: ExceptionToCatch) {
+ *        handleException(e)
+ *    } finally {
+ *       cleanup()
+ *    }
+ * }
+ * ```
+ *
+ * However, if this `job` is [cancelled][Job.cancel], then `cleanup()` is executed in the context of the
+ * already cancelled [Job]. The same happens for `handleException` if [CancellationException] is being caught.
+ * Any cancellable suspending function would itself throw a [CancellationException]. So, any suspending
+ * code has to be wrapped into `withContext(NonCancellable) { ... }` (see [NonCancellable]).
+ *
+ * A simpler way to handle exceptions is provided via [launchBuilder] function. It takes the same parameters
+ * as `launch`, but allows to specify [catch][CoroutineBuilder.catch] and [finally][CoroutineBuilder.finally]
+ * blocks before building a coroutine with [build][CoroutineBuilder.build].
+ * In this way, the proper non-cancellable context is already established for `catch` and `finally` blocks:
+ *
+ * ```
+ * val job = launchBuilder {
+ *     // ... body of the coroutine ...
+ * }.catch<ExceptionToCatch> { e ->
+ *     handleException(e)
+ * }.finally {
+ *     cleanup()
+ * }.build()
+ * ```
+ *
+ * See [CoroutineBuilder] for details.
+ *
+ * ### Debugging
  *
  * See [newCoroutineContext] for a description of debugging facilities that are available for newly created coroutine.
  *
@@ -53,6 +99,41 @@ public fun CoroutineScope.launch(
         StandaloneCoroutine(newContext, active = true)
     coroutine.start(start, coroutine, block)
     return coroutine
+}
+
+/**
+ * Creates a builder for [launch] call, so that exception handlers can be conveniently defined
+ * using [catch][CoroutineBuilder.catch] and [finally][CoroutineBuilder.finally]. The coroutine is
+ * created at the end of builder chain [CoroutineBuilder.build].
+ *
+ * For example:
+ *
+ * ```
+ * val job = launchBuilder {
+ *     // ... body of the coroutine ...
+ * }.catch<ExceptionToCatch> { e ->
+ *     handleException(e)
+ * }.finally {
+ *     cleanup()
+ * }.build()
+ * ```
+ */
+public fun CoroutineScope.launchBuilder(
+    context: CoroutineContext = EmptyCoroutineContext,
+    start: CoroutineStart = CoroutineStart.DEFAULT,
+    block: suspend CoroutineScope.() -> Unit
+): CoroutineBuilder<Job, CoroutineScope, Unit> =
+    LaunchBuilder(this, context, start, block)
+
+private class LaunchBuilder(
+    private val scope: CoroutineScope,
+    private val context: CoroutineContext = EmptyCoroutineContext,
+    private val start: CoroutineStart = CoroutineStart.DEFAULT,
+    block: Any
+) : CoroutineBuilder<Job, CoroutineScope, Unit>(block) {
+    override fun updateBlock(block: Any): CoroutineBuilder<Job, CoroutineScope, Unit> =
+        LaunchBuilder(scope, context, start, block)
+    override fun build(): Job = scope.launch(context, start, currentBlock)
 }
 
 // --------------- async ---------------
@@ -160,6 +241,24 @@ public suspend fun <T> withContext(
     coroutine.initParentJob()
     block.startCoroutineCancellable(coroutine, coroutine)
     coroutine.getResult()
+}
+
+/**
+ * Optimized internal version of [withContext] that is essentially equivalent to
+ * `withContext(NonCancellable) { block(param) }`.
+ */
+internal suspend fun <P, T> withNonCancellableContext(
+    param: P,
+    block: suspend CoroutineScope.(P) -> T
+): T = suspendCoroutineUninterceptedOrReturn sc@ { uCont ->
+    // compute new context
+    val oldContext = uCont.context
+    val newContext = oldContext.minusKey(Job) // is not going to be a child of the parent job
+    val coroutine = UndispatchedCoroutine(newContext, uCont) // MODE_UNDISPATCHED
+    // todo: lambda allocation in the below code can be optimized away
+    return@sc coroutine.startUndispatchedOrReturn(coroutine) {
+        block(param)
+    }
 }
 
 /**

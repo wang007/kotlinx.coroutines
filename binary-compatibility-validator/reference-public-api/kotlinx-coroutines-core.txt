@@ -5,7 +5,6 @@ public abstract class kotlinx/coroutines/AbstractCoroutine : kotlinx/coroutines/
 	public final fun getContext ()Lkotlin/coroutines/CoroutineContext;
 	public fun getCoroutineContext ()Lkotlin/coroutines/CoroutineContext;
 	public fun isActive ()Z
-	protected fun onCancellation (Ljava/lang/Throwable;)V
 	protected fun onCancelled (Ljava/lang/Throwable;Z)V
 	protected fun onCompleted (Ljava/lang/Object;)V
 	protected fun onStart ()V
@@ -27,6 +26,8 @@ public final class kotlinx/coroutines/BuildersKt {
 	public static final fun invoke (Lkotlinx/coroutines/CoroutineDispatcher;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static final fun launch (Lkotlinx/coroutines/CoroutineScope;Lkotlin/coroutines/CoroutineContext;Lkotlinx/coroutines/CoroutineStart;Lkotlin/jvm/functions/Function2;)Lkotlinx/coroutines/Job;
 	public static synthetic fun launch$default (Lkotlinx/coroutines/CoroutineScope;Lkotlin/coroutines/CoroutineContext;Lkotlinx/coroutines/CoroutineStart;Lkotlin/jvm/functions/Function2;ILjava/lang/Object;)Lkotlinx/coroutines/Job;
+	public static final fun launchBuilder (Lkotlinx/coroutines/CoroutineScope;Lkotlin/coroutines/CoroutineContext;Lkotlinx/coroutines/CoroutineStart;Lkotlin/jvm/functions/Function2;)Lkotlinx/coroutines/CoroutineBuilder;
+	public static synthetic fun launchBuilder$default (Lkotlinx/coroutines/CoroutineScope;Lkotlin/coroutines/CoroutineContext;Lkotlinx/coroutines/CoroutineStart;Lkotlin/jvm/functions/Function2;ILjava/lang/Object;)Lkotlinx/coroutines/CoroutineBuilder;
 	public static final fun runBlocking (Lkotlin/coroutines/CoroutineContext;Lkotlin/jvm/functions/Function2;)Ljava/lang/Object;
 	public static synthetic fun runBlocking$default (Lkotlin/coroutines/CoroutineContext;Lkotlin/jvm/functions/Function2;ILjava/lang/Object;)Ljava/lang/Object;
 	public static final fun withContext (Lkotlin/coroutines/CoroutineContext;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
@@ -138,6 +139,13 @@ public final class kotlinx/coroutines/CompletionHandlerException : java/lang/Run
 
 public abstract interface class kotlinx/coroutines/CopyableThrowable {
 	public abstract fun createCopy ()Ljava/lang/Throwable;
+}
+
+public abstract class kotlinx/coroutines/CoroutineBuilder {
+	protected final field currentBlock Lkotlin/jvm/functions/Function2;
+	public abstract fun build ()Ljava/lang/Object;
+	public final fun catchIf (Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function3;)Lkotlinx/coroutines/CoroutineBuilder;
+	public final fun finally (Lkotlin/jvm/functions/Function3;)Lkotlinx/coroutines/CoroutineBuilder;
 }
 
 public final class kotlinx/coroutines/CoroutineContextKt {
