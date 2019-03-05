@@ -13,6 +13,7 @@ import java.io.*
 import java.text.*
 import java.util.*
 import kotlin.collections.ArrayList
+import kotlin.collections.HashMap
 import kotlin.coroutines.*
 import kotlin.coroutines.jvm.internal.*
 import kotlinx.coroutines.internal.artificialFrame as createArtificialFrame // IDEA bug workaround
@@ -25,7 +26,7 @@ import kotlinx.coroutines.internal.artificialFrame as createArtificialFrame // I
 internal object DebugProbesImpl {
     private const val ARTIFICIAL_FRAME_MESSAGE = "Coroutine creation stacktrace"
     private val dateFormat = SimpleDateFormat("yyyy/MM/dd HH:mm:ss")
-    private val capturedCoroutines = WeakHashMap<ArtificialStackFrame<*>, CoroutineState>()
+    private val capturedCoroutines: MutableSet<CoroutineOwner<*>> = Collections.newSetFromMap(HashMap())
     @Volatile
     private var installations = 0
     private val isInstalled: Boolean get() = installations > 0
@@ -77,8 +78,8 @@ internal object DebugProbesImpl {
     public fun hierarchyToString(job: Job): String {
         check(isInstalled) { "Debug probes are not installed" }
         val jobToStack = capturedCoroutines
-            .filterKeys { it.delegate.context[Job] != null }
-            .mapKeys { it.key.delegate.context[Job]!! }
+            .filter { it.delegate.context[Job] != null }
+            .associateBy({ it.delegate.context[Job]!! }, {it.state})
         return buildString {
             job.build(jobToStack, this, "")
         }
@@ -115,8 +116,8 @@ internal object DebugProbesImpl {
     @Synchronized
     public fun dumpCoroutinesState(): List<CoroutineState> {
         check(isInstalled) { "Debug probes are not installed" }
-        return capturedCoroutines.entries.asSequence()
-            .map { CoroutineState(it.key.delegate, it.value) }
+        return capturedCoroutines.asSequence()
+            .map { CoroutineState(it.delegate, it.state) }
             .sortedBy { it.sequenceNumber }
             .toList()
     }
@@ -133,19 +134,20 @@ internal object DebugProbesImpl {
         append("Coroutines dump ${dateFormat.format(System.currentTimeMillis())}")
         capturedCoroutines
             .asSequence()
-            .sortedBy { it.value.sequenceNumber }
-            .forEach { (key, value) ->
-                val observedStackTrace = value.lastObservedStackTrace()
-                val enhancedStackTrace = enhanceStackTraceWithThreadDump(value, observedStackTrace)
-                val state = if (value.state == State.RUNNING && enhancedStackTrace === observedStackTrace)
-                    "${value.state} (Last suspension stacktrace, not an actual stacktrace)"
+            .sortedBy { it.state.sequenceNumber }
+            .forEach { owner ->
+                val coroutineState = owner.state
+                val observedStackTrace = coroutineState.lastObservedStackTrace()
+                val enhancedStackTrace = enhanceStackTraceWithThreadDump(coroutineState, observedStackTrace)
+                val state = if (coroutineState.state == State.RUNNING && enhancedStackTrace === observedStackTrace)
+                    "${coroutineState.state} (Last suspension stacktrace, not an actual stacktrace)"
                 else
-                    value.state.toString()
+                    coroutineState.state.toString()
 
-                append("\n\nCoroutine $key, state: $state")
+                append("\n\nCoroutine ${owner.delegate}, state: $state")
                 if (observedStackTrace.isEmpty()) {
                     append("\n\tat ${createArtificialFrame(ARTIFICIAL_FRAME_MESSAGE)}")
-                    printStackTrace(value.creationStackTrace)
+                    printStackTrace(coroutineState.creationStackTrace)
                 } else {
                     printStackTrace(enhancedStackTrace)
                 }
@@ -265,14 +267,14 @@ internal object DebugProbesImpl {
         }
 
         // Find ArtificialStackFrame of the coroutine
-        val owner = frame.owner()
+        val owner = frame.owner() ?: return
         updateState(owner, frame, state)
     }
 
     @Synchronized // See comment to stateCache
     private fun updateRunningState(continuation: Continuation<*>, state: State) {
         val frame = continuation as? CoroutineStackFrame ?: return
-        val coroutineState = stateCache.remove(frame) ?: capturedCoroutines[frame.owner()] ?: return
+        val coroutineState = stateCache.remove(frame) ?: frame.owner()?.state ?: return
         // Do not cache states for proxy-classes such as ScopeCoroutines
         val caller = frame.realCaller()
         if (caller != null) {
@@ -289,16 +291,16 @@ internal object DebugProbesImpl {
     }
 
     @Synchronized
-    private fun updateState(owner: ArtificialStackFrame<*>?, frame: Continuation<*>, state: State) {
-        val coroutineState = capturedCoroutines[owner] ?: return
+    private fun updateState(owner: CoroutineOwner<*>, frame: Continuation<*>, state: State) {
+        val coroutineState = owner.state
         coroutineState.updateState(state, frame)
     }
 
-    private fun Continuation<*>.owner(): ArtificialStackFrame<*>? =
+    private fun Continuation<*>.owner(): CoroutineOwner<*>? =
         (this as? CoroutineStackFrame)?.owner()
 
-    private tailrec fun CoroutineStackFrame.owner(): ArtificialStackFrame<*>? =
-        if (this is ArtificialStackFrame<*>) this else callerFrame?.owner()
+    private tailrec fun CoroutineStackFrame.owner(): CoroutineOwner<*>? =
+        if (this is CoroutineOwner<*>) this else callerFrame?.owner()
 
     internal fun <T> probeCoroutineCreated(completion: Continuation<T>): Continuation<T> {
         if (!isInstalled) return completion
@@ -312,7 +314,7 @@ internal object DebugProbesImpl {
          * Here we replace completion with a sequence of CoroutineStackFrame objects
          * which represents creation stacktrace, thus making stacktrace recovery mechanism
          * even more verbose (it will attach coroutine creation stacktrace to all exceptions),
-         * and then using this artificial frame as an identifier of coroutineSuspended/resumed calls.
+         * and then using CoroutineOwner completion as unique identifier of coroutineSuspended/resumed calls.
          */
         val stacktrace = sanitizeStackTrace(Exception())
         val frame = stacktrace.foldRight<StackTraceElement, CoroutineStackFrame?>(null) { frame, acc ->
@@ -320,24 +322,31 @@ internal object DebugProbesImpl {
                 override val callerFrame: CoroutineStackFrame? = acc
                 override fun getStackTraceElement(): StackTraceElement = frame
             }
-        }
-        return ArtificialStackFrame(completion, frame!!).also {
-            storeFrame(it, completion)
-        }
+        }!!
+
+        return createOwner(completion, frame)
     }
 
     @Synchronized
-    private fun <T> storeFrame(frame: ArtificialStackFrame<T>, completion: Continuation<T>) {
-        capturedCoroutines[frame] = CoroutineState(completion, frame, ++sequenceNumber)
+    private fun <T> createOwner(completion: Continuation<T>, frame: CoroutineStackFrame): CoroutineOwner<T> {
+        val state = CoroutineState(completion, frame, ++sequenceNumber)
+        val owner = CoroutineOwner(completion, state, frame)
+        capturedCoroutines += owner
+        return owner
     }
 
     @Synchronized
-    private fun probeCoroutineCompleted(coroutine: ArtificialStackFrame<*>) {
+    private fun probeCoroutineCompleted(coroutine: CoroutineOwner<*>) {
         capturedCoroutines.remove(coroutine)
     }
 
-    private class ArtificialStackFrame<T>(
+    /**
+     * This class is injected as completion of all continuations in [probeCoroutineCompleted].
+     * It is owning the coroutine state and responsible for managing all its external state related to debug agent.
+     */
+    private class CoroutineOwner<T>(
         @JvmField val delegate: Continuation<T>,
+        @JvmField val state: CoroutineState,
         frame: CoroutineStackFrame
     ) : Continuation<T> by delegate, CoroutineStackFrame by frame {
         override fun resumeWith(result: Result<T>) {
