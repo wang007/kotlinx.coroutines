@@ -42,7 +42,8 @@ public data class CoroutineInfo internal constructor(
     @JvmField
     internal var lastObservedThread: Thread? = null
 
-    private var lastObservedFrame: CoroutineStackFrame? = null
+    @JvmField
+    internal var lastObservedFrame: CoroutineStackFrame? = null
 
     // Copy constructor
     internal constructor(coroutine: Continuation<*>, state: CoroutineInfo) : this(

@@ -41,7 +41,7 @@ internal object DebugProbesImpl {
      * Then at least three RUNNING -> RUNNING transitions will occur consecutively and complexity of each is O(depth).
      * To avoid that quadratic complexity, we are caching lookup result for such chains in this map and update it incrementally.
      */
-    private val infoCache = HashMap<CoroutineStackFrame, CoroutineInfo>()
+    private val callerInfoCache = HashMap<CoroutineStackFrame, CoroutineInfo>()
 
     @Synchronized
     public fun install() {
@@ -64,7 +64,7 @@ internal object DebugProbesImpl {
         if (--installations != 0) return
 
         capturedCoroutines.clear()
-        infoCache.clear()
+        callerInfoCache.clear()
         val cl = Class.forName("kotlin.coroutines.jvm.internal.DebugProbesKt")
         val cl2 = Class.forName("kotlinx.coroutines.debug.internal.NoOpProbesKt")
 
@@ -262,7 +262,8 @@ internal object DebugProbesImpl {
     private fun updateState(frame: Continuation<*>, state: State) {
         // KT-29997 is here only since 1.3.30
         if (state == State.RUNNING && KotlinVersion.CURRENT.isAtLeast(1, 3, 30)) {
-            updateRunningState(frame, state)
+            val stackFrame = frame as? CoroutineStackFrame ?: return
+            updateRunningState(stackFrame, state)
             return
         }
 
@@ -271,24 +272,29 @@ internal object DebugProbesImpl {
         updateState(owner, frame, state)
     }
 
-    @Synchronized // See comment to infoCache
-    private fun updateRunningState(continuation: Continuation<*>, state: State) {
+    @Synchronized // See comment to callerInfoCache
+    private fun updateRunningState(frame: CoroutineStackFrame, state: State) {
         if (!isInstalled) return
-        val frame = continuation as? CoroutineStackFrame ?: return
-        val info = infoCache.remove(frame) ?: frame.owner()?.info ?: return
-        // Do not cache it for proxy-classes such as ScopeCoroutines
-        val caller = frame.realCaller()
-        if (caller != null) {
-            infoCache[caller] = info
+        // Lookup coroutine info in cache or by traversing stack frame
+        val info: CoroutineInfo
+        val cached = callerInfoCache.remove(frame)
+        if (cached != null) {
+            info = cached
+        } else {
+            info = frame.owner()?.info ?: return
+            // Guard against improper implementations of CoroutineStackFrame and bugs in the compiler
+            callerInfoCache.remove(info.lastObservedFrame?.realCaller())
         }
 
-        info.updateState(state, continuation)
+        info.updateState(state, frame as Continuation<*>)
+        // Do not cache it for proxy-classes such as ScopeCoroutines
+        val caller = frame.realCaller() ?: return
+        callerInfoCache[caller] = info
     }
 
     private tailrec fun CoroutineStackFrame.realCaller(): CoroutineStackFrame? {
         val caller = callerFrame ?: return null
-        if (caller.getStackTraceElement() != null) return caller
-        else return caller.realCaller()
+        return if (caller.getStackTraceElement() != null) caller else caller.realCaller()
     }
 
     @Synchronized
@@ -339,6 +345,12 @@ internal object DebugProbesImpl {
     @Synchronized
     private fun probeCoroutineCompleted(owner: CoroutineOwner<*>) {
         capturedCoroutines.remove(owner)
+        /*
+         * This removal is a guard against improperly implemented CoroutineStackFrame
+         * and bugs in the compiler.
+         */
+        val caller = owner.info.lastObservedFrame?.realCaller()
+        callerInfoCache.remove(caller)
     }
 
     /**
